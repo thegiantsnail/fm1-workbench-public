@@ -21,8 +21,9 @@ Tools for the **M-VAVE FM-1** pocket FM synth (DX7-compatible, USB MIDI + USB au
   the same **Speech** tab and **Software FM-1** as the web app (Kotlin ports kept identical by parity tests generated
   from the JS: `android/tools/make_synth_vectors.cjs`, `make_speech_vectors.cjs`). ⚙ menu: output (Auto / FM-1 /
   Software FM-1), firmware (M-VAVE / FM-1+VA) and CC 7 volume. Build/test: `cd android && gradlew testDebugUnitTest assembleDebug`.
-- **`vst/`** — **FM-1 Controller**, an instrument plugin (VST3/CLAP, Rust, macOS) that plays and programs the FM-1
-  from a DAW: notes with sample-accurate timestamps, all 145 voice parameters and the effects as automatable host
+- **`vst/`** — **FM-1 Controller**, an instrument plugin (VST3/CLAP, Rust; macOS, and Windows untested) that plays and programs the FM-1
+  from a DAW, and plays a built-in software FM-1 (a Rust port of `app/fm1-synth.js`, level-matched to the unit) when
+  no FM-1 is connected and for offline renders: notes with sample-accurate timestamps, all 145 voice parameters and the effects as automatable host
   parameters saved with the project, and an editor with your voice library, the voice editor, randomize/mutate/morph, a
   drum-kit mode that switches voice per hit, and **Speech**: it runs `app/speech.js` unmodified in an embedded
   JavaScript engine, so a typed phrase can be spoken from a button or from a MIDI note at that note's pitch. It talks

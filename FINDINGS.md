@@ -219,6 +219,26 @@ Measured with `vst/hw_check.py` and the examples in `vst/examples/`, recording t
   6.70 s against 6.72 s in the Software FM-1 render of the same events, loudness contours correlating at 0.77, lag 0.
 - CC 7 volume 100 -> 32: 9.9 dB (9.7 above). CC 76 = 40 / 80 / 127: 4.8 / 10.2 / 50.5 Hz (5.0 / 10.4 / 50.7 above).
 
+### The plugin's built-in synth against the unit (2026-10-01, `vst/synth_check.py --va`)
+The plugin has a Rust port of the Software FM-1 (`vst/src/synth.rs`); its samples equal `app/fm1-synth.js` in Node to
+2e-8 for 14 test renders. Comparing that port with the unit's USB audio turned up three things about the unit:
+
+- **The unit's output is a first-order high-pass at 20 Hz.** Init voice (a sine) on low notes, relative to note 60:
+  -0.4 dB at 65 Hz, -0.7 at 46, -1.4 at 33, -2.4 at 23, -3.9 at 16.4, -6.0 at 11.6, -8.4 at 8.2. Every point fits
+  -10 log10(1 + (20/f)^2) within 0.1 dB.
+- **The Software FM-1 carries a wandering offset the unit does not.** A feedback operator modulating a carrier at the
+  same pitch, a few detune steps apart, makes the wave lopsided by an amount that swells and fades at their beat rate
+  (well under 1 Hz to a few Hz). SYN-LEAD 1 (ROM1A 14): offset -5 dB relative to the signal; FLUTE 1 -12 dB; BRASS 1
+  -20 dB. The unit's 20 Hz high-pass removes it; with the same filter the port's is below -36 dB.
+  `app/fm1-synth.js` and the Kotlin port have no such filter. Not changed here: it needs the parity vectors.
+- **Level.** At its default volume (0.8) the Software FM-1 is 4.9 dB louder than the unit's USB audio with the
+  unit's master volume (CC 7) at 127, over eight ROM1A voices at note 60 (4.3 to 5.5 dB). The plugin's synth uses
+  0.456 instead and then sits within -1.4 to +0.8 dB of the unit over three runs (median -0.2), spectra alike to 0.93-1.00
+  (sixth-octave bands, 60 Hz to 15 kHz; E.PIANO 1 and BRASS 1 lowest, as in the 12-voice comparison below).
+- **The Software FM-1's sustain pedal does not hold.** `noteOff` under the pedal clears `down`, and the envelope code
+  treats a voice that is not `down` as released, so the note fades while its voice lingers. The port holds the
+  envelopes until the pedal lifts. The unit's own pedal behaviour was not measured.
+
 ## Baud Girl's FM-1+VA firmware (FM-1_093, installed 2026-09-30; `test_firmware_quirks.py`)
 Installed from https://baudgirl.com/work/FM-1+VA/install (Web MIDI in Chrome). Rollback: M-VAVE V15 `FM-1.fwsc`
 (699,956 bytes, sha256 db1642b2...edb8a) kept in the git-ignored `firmware/`, installed via "Install a file".

@@ -926,6 +926,7 @@ version = "0.1.0"
 dependencies = [
  "coremidi 0.8.0",
  "mach2",
+ "midir",
  "nih_plug",
  "nih_plug_egui",
  "rquickjs",

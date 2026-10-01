@@ -38,6 +38,40 @@ pub struct Shared {
     /// Counters the audio thread keeps for the status file: blocks processed, notes received.
     pub blocks: AtomicU32,
     pub notes: AtomicU32,
+    /// What is playing, as the audio thread last decided: the built-in synth, the FM-1, or both.
+    pub software: AtomicBool,
+    pub hardware: AtomicBool,
+}
+
+/// Where the sound comes from (the `sound` parameter).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Sound {
+    /// The FM-1 when it is connected, else the built-in synth. Offline renders use the synth.
+    Auto,
+    Fm1,
+    BuiltIn,
+    Both,
+}
+
+impl Sound {
+    pub const NAMES: [&'static str; 4] = ["Auto", "FM-1 only", "Built-in synth", "Both"];
+
+    /// What plays: (the FM-1, the built-in synth). The hardware cannot render faster than real
+    /// time, so it is never used offline, and `Auto` and `Both` only use it when it is there.
+    pub fn sinks(self, connected: bool, realtime: bool) -> (bool, bool) {
+        let hardware = realtime
+            && match self {
+                Sound::Auto | Sound::Both => connected,
+                Sound::Fm1 => true,
+                Sound::BuiltIn => false,
+            };
+        let software = match self {
+            Sound::Auto => !hardware,
+            Sound::Fm1 => false,
+            Sound::BuiltIn | Sound::Both => true,
+        };
+        (hardware, software)
+    }
 }
 
 pub const AUDITION: u32 = 1 << 16;
@@ -105,6 +139,8 @@ pub struct Fm1Params {
     pub volume: IntParam,
     /// On: a note speaks the phrase at that note's pitch instead of playing the voice.
     pub speech_mode: BoolParam,
+    /// What makes the sound: see `Sound`.
+    pub sound: IntParam,
     /// Voice name (10 characters on the device), saved with the project.
     pub name: RwLock<String>,
     pub shared: Arc<Shared>,
@@ -141,8 +177,30 @@ fn voice_param(index: usize, default: u8) -> IntParam {
     }
 }
 
+/// What a new set of parameters starts from. A host only ever uses the default; the tests of the
+/// audio callback start from other values, since only a host can change a parameter afterwards.
+pub struct Setup {
+    pub voice: dx7::Voice,
+    pub sound: Sound,
+    pub kit_mode: bool,
+    pub shared: Arc<Shared>,
+}
+
+impl Default for Setup {
+    fn default() -> Self {
+        // The init voice with operator 1 audible, unlike the raw field defaults.
+        Setup { voice: dx7::init_voice(), sound: Sound::Auto, kit_mode: false, shared: Arc::default() }
+    }
+}
+
 impl Default for Fm1Params {
     fn default() -> Self {
+        Fm1Params::new(Setup::default())
+    }
+}
+
+impl Fm1Params {
+    pub fn new(setup: Setup) -> Self {
         let mut fx = Vec::with_capacity(FX_COUNT);
         for (_, effect, values) in EFFECTS {
             fx.push(Fx::Switch(BoolParam::new(format!("{effect} On"), false)));
@@ -159,24 +217,26 @@ impl Default for Fm1Params {
         let channel = |name: &str, default| {
             IntParam::new(name, default, IntRange::Linear { min: 1, max: 16 }).non_automatable()
         };
-        let init = dx7::init_voice(); // operator 1 audible, unlike a raw field default
         Fm1Params {
-            voice: (0..VOICE_PARAMS).map(|index| voice_param(index, init[index])).collect(),
+            voice: (0..VOICE_PARAMS).map(|index| voice_param(index, setup.voice[index])).collect(),
             fx,
             control_fx: BoolParam::new("Control Effects", false),
             key_channel: channel("Note Channel", 1),
             fx_channel: channel("Effect Channel", 2),
             panic: BoolParam::new("Panic", false),
             resend: BoolParam::new("Resend Voice", false),
-            kit_mode: BoolParam::new("Kit Mode", false),
+            kit_mode: BoolParam::new("Kit Mode", setup.kit_mode),
             kit_lead: IntParam::new("Kit Lookahead", 20, IntRange::Linear { min: 0, max: 40 })
                 .with_unit(" ms")
                 .non_automatable(),
             firmware_va: BoolParam::new("FM-1+VA Firmware", false).non_automatable(),
             volume: IntParam::new("Volume", 100, IntRange::Linear { min: 0, max: 127 }),
             speech_mode: BoolParam::new("Speech Mode", false),
+            sound: IntParam::new("Sound", setup.sound as i32, IntRange::Linear { min: 0, max: 3 })
+                .with_value_to_string(names(&Sound::NAMES, 0))
+                .non_automatable(),
             name: RwLock::new("INIT VOICE".into()),
-            shared: Arc::new(Shared::default()),
+            shared: setup.shared,
             editor_state: EguiState::from_size(EDITOR_SIZE.0, EDITOR_SIZE.1),
         }
     }
@@ -203,6 +263,15 @@ impl Fm1Params {
             };
         }
         values
+    }
+
+    pub fn sound_mode(&self) -> Sound {
+        match self.sound.value() {
+            1 => Sound::Fm1,
+            2 => Sound::BuiltIn,
+            3 => Sound::Both,
+            _ => Sound::Auto,
+        }
     }
 
     /// Voice parameters and name as the editor sees them.
@@ -246,7 +315,7 @@ fn clean_name(text: &str) -> String {
 // alive in an `Arc` and which is never resized or moved after construction.
 unsafe impl Params for Fm1Params {
     fn param_map(&self) -> Vec<(String, ParamPtr, String)> {
-        let mut map = Vec::with_capacity(VOICE_PARAMS + FX_COUNT + 10);
+        let mut map = Vec::with_capacity(VOICE_PARAMS + FX_COUNT + 11);
         // Hosts list parameters in this order: operators 1..6, then the voice globals.
         for op in 1..=6 {
             for (f, field) in dx7::OP_FIELDS.iter().enumerate() {
@@ -281,6 +350,7 @@ unsafe impl Params for Fm1Params {
             ("fw_va", self.firmware_va.as_ptr()),
             ("volume", self.volume.as_ptr()),
             ("speech_mode", self.speech_mode.as_ptr()),
+            ("sound", self.sound.as_ptr()),
         ] {
             map.push((id.to_string(), ptr, "FM-1".to_string()));
         }
@@ -333,7 +403,7 @@ mod tests {
         assert_eq!(params.edit_buffer(&params.name_bytes().unwrap()), dx7::init_voice());
 
         let map = params.param_map();
-        assert_eq!(map.len(), VOICE_PARAMS + FX_COUNT + 10);
+        assert_eq!(map.len(), VOICE_PARAMS + FX_COUNT + 11);
         let mut ids: Vec<_> = map.iter().map(|(id, _, _)| id.as_str()).collect();
         assert_eq!(&ids[..3], ["op1_r1", "op1_r2", "op1_r3"]);
         assert_eq!(ids[6 * 21 + 8], "alg");
@@ -342,7 +412,24 @@ mod tests {
         assert_eq!(map[16].2, "Operator 1");
         ids.sort_unstable();
         ids.dedup();
-        assert_eq!(ids.len(), VOICE_PARAMS + FX_COUNT + 10);
+        assert_eq!(ids.len(), VOICE_PARAMS + FX_COUNT + 11);
+    }
+
+    #[test]
+    fn sound_modes_choose_the_hardware_the_synth_or_both() {
+        // (mode, connected, realtime) -> (FM-1, built-in synth)
+        assert_eq!(Sound::Auto.sinks(true, true), (true, false));
+        assert_eq!(Sound::Auto.sinks(false, true), (false, true));
+        assert_eq!(Sound::Auto.sinks(true, false), (false, true)); // offline: the unit cannot keep up
+        assert_eq!(Sound::Fm1.sinks(false, true), (true, false));
+        assert_eq!(Sound::Fm1.sinks(true, false), (false, false));
+        assert_eq!(Sound::BuiltIn.sinks(true, true), (false, true));
+        assert_eq!(Sound::Both.sinks(true, true), (true, true));
+        assert_eq!(Sound::Both.sinks(false, true), (false, true));
+
+        let params = Fm1Params::default();
+        assert_eq!(params.sound_mode(), Sound::Auto);
+        assert_eq!(params.sound.normalized_value_to_string(params.sound.preview_normalized(2), false), "Built-in synth");
     }
 
     #[test]

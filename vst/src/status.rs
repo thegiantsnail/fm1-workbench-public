@@ -1,6 +1,7 @@
 //! A status file for looking inside the plugin while a host has it loaded.
 //!
-//! Off unless a file named `debug` exists in `~/Library/Application Support/FM-1 Controller/`.
+//! Off unless a file named `debug` exists in the plugin's support folder (`platform::support_dir`:
+//! `~/Library/Application Support/FM-1 Controller/` on macOS, `%APPDATA%\FM-1 Controller\` on Windows).
 //! While it does, `status.json` beside it is rewritten once a second by a background thread with
 //! what the plugin believes: whether the unit is connected, the modes, the speech engine's state
 //! and counters that show the host is calling the audio callback and delivering notes.
@@ -16,8 +17,7 @@ use serde_json::json;
 use crate::params::Fm1Params;
 
 pub fn folder() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME").map(PathBuf::from)?;
-    Some(home.join("Library/Application Support/FM-1 Controller"))
+    crate::platform::support_dir()
 }
 
 /// What the plugin believes, as JSON.
@@ -36,6 +36,11 @@ pub fn snapshot(params: &Fm1Params) -> serde_json::Value {
             "connected": shared.link.connected.load(Ordering::Relaxed),
             "sent": shared.link.sent.load(Ordering::Relaxed),
             "dropped": shared.link.dropped.load(Ordering::Relaxed),
+        },
+        "sound": {
+            "mode": crate::params::Sound::NAMES[params.sound.value().clamp(0, 3) as usize],
+            "fm1": shared.hardware.load(Ordering::Relaxed),
+            "built_in_synth": shared.software.load(Ordering::Relaxed),
         },
         "modes": {
             "kit": params.kit_mode.value(),
@@ -116,6 +121,8 @@ mod tests {
         assert_eq!(status["audio"]["blocks"], 1234);
         assert_eq!(status["audio"]["notes_received"], 7);
         assert_eq!(status["midi"]["connected"], false);
+        assert_eq!(status["sound"]["mode"], "Auto");
+        assert_eq!(status["sound"]["built_in_synth"], false); // set by the audio thread once it runs
         assert_eq!(status["modes"]["speech"], false);
         assert_eq!(status["voice"], "INIT VOICE");
         assert_eq!(status["speech"]["state"], "Idle");

@@ -9,6 +9,7 @@ use serde::Deserialize;
 
 use crate::dx7::{self, Voice};
 use crate::kit::{Kit, Macros, Track, BASE_KEY};
+use crate::platform;
 
 pub const TAGS: [&str; 16] = [
     "keys", "brass", "bass", "strings", "perc", "pluck", "pad", "lead", "bell", "organ", "wind",
@@ -220,30 +221,32 @@ pub enum State {
     Failed(String),
 }
 
-/// File in the plugin's Application Support folder naming the workbench folder, one line. A
-/// plugin in a DAW started from the Finder never sees shell environment variables.
+/// File in the plugin's support folder (`platform::support_dir`) naming the workbench folder,
+/// one line. A plugin in a DAW started from the Finder or the Start menu never sees shell
+/// environment variables.
 pub const PATH_FILE: &str = "workbench-path.txt";
 
 /// Folders that may hold `index.json`, most specific first.
 pub fn candidates() -> Vec<PathBuf> {
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    candidates_from(home.as_deref(), std::env::var_os("FM1_WORKBENCH").map(PathBuf::from))
+    let workbench = std::env::var_os("FM1_WORKBENCH").map(PathBuf::from);
+    candidates_from(platform::home().as_deref(), platform::support_dir().as_deref(), workbench)
 }
 
-fn candidates_from(home: Option<&Path>, workbench: Option<PathBuf>) -> Vec<PathBuf> {
+fn candidates_from(home: Option<&Path>, support: Option<&Path>, workbench: Option<PathBuf>) -> Vec<PathBuf> {
     let library = |root: PathBuf| root.join("app").join("library");
     let mut dirs: Vec<PathBuf> = workbench.into_iter().map(library).collect();
-    if let Some(home) = home {
-        let support = home.join("Library/Application Support/FM-1 Controller");
+    if let Some(support) = support {
         if let Ok(text) = std::fs::read_to_string(support.join(PATH_FILE)) {
             let named = text.lines().next().unwrap_or("").trim();
-            if let Some(rest) = named.strip_prefix("~/") {
-                dirs.push(library(home.join(rest)));
-            } else if !named.is_empty() {
-                dirs.push(library(PathBuf::from(named)));
+            match (named.strip_prefix("~/").or_else(|| named.strip_prefix("~\\")), home) {
+                (Some(rest), Some(home)) => dirs.push(library(home.join(rest))),
+                _ if !named.is_empty() => dirs.push(library(PathBuf::from(named))),
+                _ => {}
             }
         }
         dirs.push(support.join("library"));
+    }
+    if let Some(home) = home {
         // A clone, then the folder name of a downloaded zip.
         for name in ["fm1-workbench", "fm1-workbench-main"] {
             dirs.push(library(home.join(name)));
@@ -269,9 +272,9 @@ pub fn shared() -> Arc<Mutex<State>> {
             Some(dir) => Library::load(dir).map(Arc::new).map_or_else(State::Failed, State::Ready),
             None => State::Failed(format!(
                 "No voice library. Build one from your own .syx banks with the workbench's \
-                 build_library.py (see its README), and if the workbench is not in ~/fm1-workbench, \
-                 put its path in ~/Library/Application Support/FM-1 Controller/{PATH_FILE}. \
-                 Looked in: {}",
+                 build_library.py (see its README), and if the workbench is not in your home \
+                 folder as fm1-workbench, put its path in {}. Looked in: {}",
+                platform::support_dir().map_or(PATH_FILE.into(), |d| d.join(PATH_FILE).display().to_string()),
                 dirs.iter().map(|d| d.display().to_string()).collect::<Vec<_>>().join(", ")
             )),
         };
@@ -367,22 +370,23 @@ mod tests {
     #[test]
     fn workbench_folder_is_found_by_environment_path_file_or_home() {
         let home = std::env::temp_dir().join(format!("fm1-home-{}", std::process::id()));
-        let support = home.join("Library/Application Support/FM-1 Controller");
+        let support = home.join("support").join("FM-1 Controller");
         std::fs::create_dir_all(&support).unwrap();
-        let plain = candidates_from(Some(&home), None);
+        let plain = candidates_from(Some(&home), Some(&support), None);
         assert_eq!(plain, vec![
             support.join("library"),
-            home.join("fm1-workbench/app/library"),
-            home.join("fm1-workbench-main/app/library"),
+            home.join("fm1-workbench").join("app").join("library"),
+            home.join("fm1-workbench-main").join("app").join("library"),
         ]);
         std::fs::write(support.join(PATH_FILE), "~/Music/tools/workbench \n# anything after the first line is ignored\n").unwrap();
-        let named = candidates_from(Some(&home), Some(PathBuf::from("/opt/wb")));
-        assert_eq!(named[0], PathBuf::from("/opt/wb/app/library")); // the environment wins
-        assert_eq!(named[1], home.join("Music/tools/workbench/app/library"));
+        let named = candidates_from(Some(&home), Some(&support), Some(PathBuf::from("/opt/wb")));
+        assert_eq!(named[0], PathBuf::from("/opt/wb").join("app").join("library")); // the environment wins
+        assert_eq!(named[1], home.join("Music/tools/workbench").join("app").join("library"));
         assert_eq!(named.len(), 5);
         std::fs::write(support.join(PATH_FILE), "/abs/wb\n").unwrap();
-        assert_eq!(candidates_from(Some(&home), None)[0], PathBuf::from("/abs/wb/app/library"));
-        assert!(candidates_from(None, None).is_empty());
+        let absolute = candidates_from(Some(&home), Some(&support), None);
+        assert_eq!(absolute[0], PathBuf::from("/abs/wb").join("app").join("library"));
+        assert!(candidates_from(None, None, None).is_empty());
         let _ = std::fs::remove_dir_all(&home);
     }
 

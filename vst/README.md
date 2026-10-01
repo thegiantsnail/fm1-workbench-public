@@ -1,8 +1,10 @@
 # FM-1 Controller
 
-An instrument plugin (VST3 and CLAP) that plays and programs the **M-VAVE FM-1** hardware synth from a DAW. It makes no sound itself: notes and parameter changes go straight to the FM-1's MIDI port, and the voice is saved in the project and sent again when the project loads.
+An instrument plugin (VST3 and CLAP, macOS and Windows) that plays and programs the **M-VAVE FM-1** hardware synth from a DAW. Notes and parameter changes go straight to the FM-1's MIDI port, and the voice is saved in the project and sent again when the project loads.
 
-Status: first working version. Verified against the hardware outside a DAW and inside FL Studio 26.1.5 (see [Verified in FL Studio](#verified-in-fl-studio)).
+**It also works without the unit.** A software FM-1 is built in: when no FM-1 is connected, and for every offline render, the plugin makes the sound itself from the same messages. See [Built-in synth](#built-in-synth).
+
+Status: first working version. Verified against the hardware outside a DAW and inside FL Studio 26.1.5 (see [Verified in FL Studio](#verified-in-fl-studio)); the built-in synth is verified in a VST3 host and against the hardware, but not yet inside FL Studio.
 
 ## What it does
 
@@ -11,6 +13,7 @@ Status: first working version. Verified against the hardware outside a DAW and i
 - **Effects**: the FM-1's 24 effect controllers (filter, reverb, delay, distortion, chorus, phaser) are parameters too. They are sent only while **Control Effects** is on; it is off by default, so the plugin leaves the unit's own effect settings alone until you ask.
 - **Panic** sends a note-off for every key. **Resend Voice** sends the whole voice again, for when the unit was edited on its own knobs. Each fires once when switched on; switch it off to arm it again.
 - **Note Channel** / **Effect Channel** default to 1 and 2, the FM-1's defaults.
+- **Sound** (Auto / FM-1 only / Built-in synth / Both): what makes the sound; see [Built-in synth](#built-in-synth).
 - **FM-1+VA Firmware** (off by default): switch it on if the unit runs Baud Girl's FM-1+VA firmware. The voice's LFO speed and delay then also go out as CC 76 and 78, which is the only way they reach that firmware's LFO, and **Volume** (CC 7) becomes a master volume. Stock M-VAVE firmware ignores all three. Volume needs the note and effect channels to differ, because on a shared channel CC 7 is the reverb mix.
 
 It talks to the FM-1 directly and finds it by name (a MIDI output containing `FM-1`), so the host's own MIDI routing and port numbers do not matter. Set `FM1_MIDI_OUT` to a fragment of another output's name to send somewhere else, for example a virtual port when testing.
@@ -25,16 +28,49 @@ The editor brings over the FM-1 workbench app's features that make sense inside 
 - **Effects**: the six effects, and "use distortion as output trim", the only volume control the FM-1 accepts over MIDI.
 - **Drum kit**: see below.
 - **Speech**: see below.
-- Top bar: connection status, voice name, Init, Undo, Play, Resend, Panic.
+- Top bar: what is playing (the FM-1, the built-in synth, or both) and the **Sound** menu, voice name, Init, Undo, Play, Resend, Panic.
 
 The library is `app/library/index.json` in the workbench folder, which the plugin looks for in this order:
 
 1. the folder named by the `FM1_WORKBENCH` environment variable;
-2. the folder named in `~/Library/Application Support/FM-1 Controller/workbench-path.txt` (one line; `~/` is understood). Use this for a DAW started from the Finder, which never sees shell environment variables;
-3. `~/Library/Application Support/FM-1 Controller/library/` itself;
-4. `~/fm1-workbench`, then `~/fm1-workbench-main`.
+2. the folder named in `workbench-path.txt` in the plugin's support folder (one line; `~/` is understood). The support folder is `~/Library/Application Support/FM-1 Controller/` on macOS and `%APPDATA%\FM-1 Controller\` on Windows. Use this for a DAW started from the Finder or the Start menu, which never sees shell environment variables;
+3. a `library` folder inside the support folder;
+4. `fm1-workbench`, then `fm1-workbench-main`, in your home folder.
 
 Without a library the editor still works, with a message in place of the list. The workbench's sequencer and MIDI file player are not ported: the host's Piano roll and playlist do those jobs.
+
+### Built-in synth
+
+The plugin contains a software FM-1: a six-operator DX7-compatible engine with the unit's six effects. It is fed exactly the messages the plugin sends to the hardware (single-parameter changes, notes, controllers), so the voice editor, the library, generators, kits, effects and speech all work on it unchanged.
+
+The **Sound** parameter chooses what plays:
+
+| Sound | With the FM-1 connected | Without it | Offline render |
+|---|---|---|---|
+| **Auto** (default) | the FM-1; the plugin's own output is silent | the built-in synth | the built-in synth |
+| **FM-1 only** | the FM-1 | nothing | nothing |
+| **Built-in synth** | the built-in synth; the unit is left alone | the built-in synth | the built-in synth |
+| **Both** | both, from the same messages | the built-in synth | the built-in synth |
+
+So a project made with the unit can be bounced offline, or opened on a machine that has no FM-1, and still sounds. When the unit appears or disappears in Auto, held notes are released where they were started and the whole voice is sent to whichever takes over.
+
+It is a port of the workbench's Software FM-1 (`app/fm1-synth.js`), which the workbench fitted to measurements of the unit: 0.75 dB per output-level step, feedback strength, velocity response, pitch-envelope speed, LFO depths, the output's treble roll-off (see `FINDINGS.md`). `cargo test` renders 14 sets of messages through this port and through the workbench's synth in Node and requires the samples to agree; they do to within 0.00000002 of full scale. Three things differ from the workbench's synth on purpose, each from a measurement of the unit made for this plugin:
+
+- **Level**: matched to the FM-1's own USB audio at the unit's full volume (the workbench's default is 4.9 dB louder).
+- **A 20 Hz high-pass on the output**, as the unit has. Without it some voices carry a slowly wandering offset (up to −5 dB of the signal on a library lead) that the unit does not.
+- **The sustain pedal holds notes.** In the workbench's synth a pedalled note fades as if released.
+
+Details that follow the hardware:
+
+- **Firmware**: the synth behaves as the firmware the **FM-1+VA Firmware** switch names. Stock: LFO fixed at 5.8 Hz, detune 2.8 cents per step, no volume control. FM-1+VA: the LFO follows the voice, detune 0.9 cents per step, **Volume** works.
+- **Effects** are heard only while **Control Effects** is on, since only then are the effect values sent. They are standard designs with ranges chosen to feel like the unit's, not copies: the unit's own algorithms are unpublished.
+- A parameter change affects the next note, not notes already sounding, as on the unit.
+- **Kit Lookahead** is not applied when only the synth plays: it takes in a voice change at once, so kit hits are not delayed and no latency is reported.
+- Sixteen voices; a seventeenth note takes a released voice, or else the oldest. Mono, on both output channels.
+
+Not emulated: the unit's stored presets, pitch bend and the mod wheel (the plugin sends none of them).
+
+`examples/render.rs` renders a voice on the synth to a WAV file with no host: `cargo run --release --example render -- out.wav [library index] [note] [seconds] [va]`. One voice renders about a thousand times faster than real time on an Apple M4.
 
 ### Drum kit mode
 
@@ -68,28 +104,41 @@ These come from measurements in the FM-1 workbench (`FINDINGS.md`):
 
 ### Looking inside a running plugin
 
-Create an empty file named `debug` in `~/Library/Application Support/FM-1 Controller/`. While it exists, every loaded plugin rewrites `status.json` beside it once a second: whether the unit is connected, messages sent and dropped, the modes, the speech engine's state and phrase, and counters showing that the host is calling the audio callback and delivering notes. Delete `debug` to stop.
+Create an empty file named `debug` in the plugin's support folder (above). While it exists, every loaded plugin rewrites `status.json` beside it once a second: whether the unit is connected, messages sent and dropped, the modes, the speech engine's state and phrase, and counters showing that the host is calling the audio callback and delivering notes. Delete `debug` to stop.
 
-Two environment variables help outside a host: `FM1_MIDI_OUT` (above) and `FM1_SPEAK="some text"`, which makes the standalone build speak once at start-up through its audio callback.
+Two environment variables help outside a host: `FM1_MIDI_OUT` (above; naming an output that does not exist makes Auto play the built-in synth) and `FM1_SPEAK="some text"`, which makes the standalone build speak once at start-up through its audio callback.
 
 ## Limits
 
-- **macOS only** for now (CoreMIDI). It builds elsewhere but sends nothing.
+- **macOS is where it has been tested.** The Windows build is compiled and unit-tested by the build workflow but has not been run on Windows hardware by the author. Known differences there:
+  - Windows lets only one program open a MIDI output. Switch the FM-1's output off in the DAW's own MIDI settings, or the plugin cannot open it and shows "FM-1 not found".
+  - WinMM has no timestamps, so the plugin times messages itself, to about a millisecond; on macOS CoreMIDI schedules them.
+  - The support folder is `%APPDATA%\FM-1 Controller\`, and the workbench is looked for in your user folder (`fm1-workbench`).
+- **Linux**: it builds, but there is no MIDI output yet.
 - **One voice at a time, or one kit**: the FM-1 holds a single edit buffer. Kit mode switches it per hit; playing different voices on different MIDI channels is not implemented.
 - **Kit voice changes are not automatable**: a kit is saved state, not host parameters.
-- **The FM-1's audio does not come back through the plugin.** Record or monitor its USB audio input in the DAW.
+- **The FM-1's audio does not come back through the plugin.** Record or monitor its USB audio input in the DAW. The plugin's own output carries only the built-in synth.
+- **The built-in synth is a model, not the unit.** Level and spectrum are close (see [Check the built-in synth](#check-the-built-in-synth)); the effects are approximations, and voices that lean on the free-running LFO differ from take to take on the unit itself.
+- **Both** plays the two from the same messages but not in sample-accurate step: the unit is 3 ms behind plus its own latency, and with the unit playing, speech reaches the synth with the audio callback's timing jitter.
 - **Speech is English text only**, and only partly intelligible: the workbench measures roughly 60 of 95 words recognised from the FM-1. The plugin cannot score that; it checks that phrases play as the engine planned.
-- **Offline rendering sends nothing**: the hardware cannot play faster than real time.
+- **Offline rendering never uses the hardware**, which cannot play faster than real time: the built-in synth renders instead (nothing, with Sound on FM-1 only).
 - **One controller at a time.** The plugin, the workbench app and the MCP servers each keep their own idea of what the unit holds; using two at once will leave one of them wrong. Use Resend Voice after the other has been used.
 - Every message is scheduled 3 ms ahead, so the FM-1 plays 3 ms after the host's timeline, plus the unit's own latency.
 
+## Download
+
+Tagged releases have ready-made builds for Windows (x64) and macOS (universal), made by the workflow in `.github/workflows/plugin.yml`.
+
+- **Windows**: copy `FM-1 Controller.vst3` to `C:\Program Files\Common Files\VST3\`.
+- **macOS**: copy `FM-1 Controller.vst3` to `~/Library/Audio/Plug-Ins/VST3/`. The build is not notarised, so clear the quarantine flag once: `xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/VST3/"FM-1 Controller.vst3"`.
+
 ## Build
 
-Needs Rust and Apple's command line tools; no Xcode.
+Needs Rust, and on macOS Apple's command line tools (no Xcode); on Windows the Visual Studio build tools.
 
 ```sh
 cd vst
-cargo test                               # 46 unit tests, no hardware; writes target/gui/*.svg
+cargo test                               # 69 unit tests, no hardware; writes target/gui/*.svg
 cargo xtask bundle fm1_vst --release     # target/bundled/FM-1 Controller.{vst3,clap,app}
 ```
 
@@ -100,6 +149,53 @@ mkdir -p ~/Library/Audio/Plug-Ins/VST3
 cp -R "target/bundled/FM-1 Controller.vst3" ~/Library/Audio/Plug-Ins/VST3/
 ```
 
+## Check the built-in synth
+
+**In a real VST3 host**, with no hardware involved (needs `pip install pedalboard mido numpy`):
+
+```sh
+cargo xtask bundle fm1_vst --release --manifest-path vst/Cargo.toml    # or: cd vst && cargo xtask bundle fm1_vst --release
+python vst/host_check.py
+```
+
+It loads the built bundle in pedalboard (a JUCE-based host), points the plugin at a MIDI output that does not exist, plays notes into it and measures the audio it returns. Last run (2026-10-01, macOS): all ten checks passed.
+
+| Check | Result |
+|---|---|
+| Auto, no unit: a note sounds | A4 at 440.0 Hz, exact silence before the note and after its release |
+| Timing | a note at 0.5 s first sounds at 500.1 ms |
+| Sound on FM-1 only | exact silence |
+| 48 kHz | A3 at 220.0 Hz |
+| `OP2 Level` raised through the host | 2nd harmonic from −74 dB to −5 dB |
+| Three notes at once | all three pitches present |
+| Reverb switched on through the host | a tail after the note |
+
+**Against the unit** (needs the FM-1, a built library and the packages in `requirements.txt`):
+
+```sh
+cargo build --release --examples --manifest-path vst/Cargo.toml
+python vst/synth_check.py --va    # leave out --va on stock firmware
+```
+
+It plays library voices on the unit and renders them on the synth, then plays the init voice on low notes on both. Last run (2026-10-01, FM-1+VA 093, unit volume at full):
+
+| Voice (ROM1A, note 60) | Unit | Synth | Spectrum alike |
+|---|---|---|---|
+| BRASS 1 | −20.0 dBFS | −19.2 dBFS | 0.972 |
+| E.PIANO 1 | −21.5 | −22.9 | 0.934 |
+| SYN-LEAD 1 | −25.1 | −25.2 | 1.000 |
+| MARIMBA | −28.3 | −28.4 | 1.000 |
+| STEEL DRUM | −26.1 | −25.9 | 0.999 |
+| BASS 2 | −31.5 | −31.8 | 0.999 |
+| STRINGS 3 | −24.4 | −25.0 | 0.977 |
+| FLUTE 1 | −26.6 | −26.8 | 0.998 |
+
+Level: the synth is within −1.4 to +0.8 dB of the unit, median −0.2 dB. "Spectrum alike" is the cosine similarity of the energy in sixth-octave bands from 60 Hz to 15 kHz over the first 0.6 s; 1.0 is identical. E.PIANO 1 varies between takes on the unit itself (0.6 dB between two runs here). Low notes of the init voice, relative to note 60, unit and synth: −0.4 and −0.4 dB at 65 Hz, −1.4 and −1.3 at 33 Hz, −3.9 and −3.9 at 16 Hz, −8.4 and −8.4 at 8 Hz.
+
+`cargo test` covers the rest without hardware or a host: the plugin's audio callback is driven as a host drives it, with the MIDI output replaced by a recorder. Checked there: Auto with and without the unit, each Sound setting, an offline render with the unit connected, the hand-over when the unit appears and disappears, voice parameters and transpose, kit mode per key, reset and Panic, and a phrase spoken through the synth on the sample clock.
+
+Not checked: the built-in synth inside FL Studio or any DAW other than the pedalboard host, the Windows build's sound, how the effects compare with the unit's, and CPU use with all sixteen voices in a host.
+
 ## Check against the hardware
 
 With the FM-1 connected and nothing else driving it, from the repository root (needs the packages in `requirements.txt`):
@@ -109,11 +205,11 @@ cargo build --release --examples --manifest-path vst/Cargo.toml
 python vst/hw_check.py            # add --va if the unit runs the FM-1+VA firmware
 ```
 
-It silences the unit, starts the plugin's standalone build, plays eight notes into it through a virtual MIDI port and records the FM-1's USB audio. It passes only if the plugin reprogrammed the voice, every note sounded on time, nothing was left hanging, a held note stopped when the output shut down, every hit of a library drum kit sounded with a voice switch on each, a spoken phrase lasted as long as the engine planned, left nothing sounding and stopped when cut short, and the standalone plugin spoke the phrase from its own audio callback and played its own voice again afterwards. With `--va` it also requires the master volume and the LFO speed to take effect. Last run (2026-10-01, FM-1+VA 093): all fifteen checks passed.
+It silences the unit, starts the plugin's standalone build, plays eight notes into it through a virtual MIDI port and records the FM-1's USB audio. It passes only if the plugin reprogrammed the voice, every note sounded on time, nothing was left hanging, a held note stopped when the output shut down, every hit of a library drum kit sounded with a voice switch on each, a spoken phrase lasted as long as the engine planned, left nothing sounding and stopped when cut short, and the standalone plugin spoke the phrase from its own audio callback and played its own voice again afterwards. With `--va` it also requires the master volume and the LFO speed to take effect. Last run (2026-10-01, FM-1+VA 093, with the built-in synth in the build): all fifteen checks passed.
 
 | Check | Result |
 |---|---|
-| Note spacing, eight notes 250 ms apart | worst error 0.98 ms |
+| Note spacing, eight notes 250 ms apart | worst error 0.98 ms and 2.4 ms in two runs |
 | Kit, a voice switch on every hit | 20 of 20 hits, no MIDI dropped |
 | Volume 100 to 32 | 9.9 dB quieter (the workbench measured 9.7) |
 | LFO speed 31 and 62 | vibrato at 4.8 and 10.2 Hz (the workbench measured 5.0 and 10.4 for those controller values) |
@@ -180,7 +276,7 @@ GNU General Public License, version 3: see `LICENSE` and `NOTICE.md` at the top 
 |---|---|
 | `src/dx7.rs` | DX7 parameter table, init voice, packed-voice unpacking, parameter-change SysEx |
 | `src/engine.rs` | What to send: voice and effect differences, note shifting, releases. No I/O |
-| `src/midi_out.rs` | Lock-free queue from the audio thread to a CoreMIDI sender thread |
+| `src/midi_out.rs` | Lock-free queue from the audio thread to the MIDI sender thread (CoreMIDI on macOS, WinMM on Windows) |
 | `src/params.rs` | Host parameters and saved state. Parameter ids are part of saved projects |
 | `src/algo.rs` | The 32 algorithms: modulation routes, carriers, feedback operator |
 | `src/library.rs` | Finds the workbench folder; loads the locally built `index.json` and `kits.json`; search |
@@ -188,12 +284,17 @@ GNU General Public License, version 3: see `LICENSE` and `NOTICE.md` at the top 
 | `src/kit.rs` | Drum kits, drum macros, the per-key table the audio thread plays |
 | `src/speech.rs` | Speech: the embedded engine and its thread, phrases, and the audio thread's runner |
 | `src/speech_glue.js` | Builds a phrase with the workbench's `speech.js`, as its Speech tab does |
+| `src/platform.rs` | Home and support folders and the clipboard, per operating system |
+| `src/synth.rs` | The built-in synth: a port of the workbench's Software FM-1 and its effects |
 | `src/status.rs` | The opt-in status file |
 | `src/editor.rs` | The editor window, and its headless tests |
-| `src/lib.rs` | The plugin |
+| `src/lib.rs` | The plugin: the audio callback, where messages go, and its end-to-end tests |
 | `examples/hold_and_drop.rs` | Hardware check for the shutdown path |
 | `examples/kit_play.rs` | Hardware check for kit playback |
 | `examples/va_check.rs` | Hardware check for the FM-1+VA controllers |
 | `examples/play_voice.rs` | Sends a library voice in one burst and plays it |
 | `examples/speak.rs` | Speaks a phrase on the unit through the plugin's runner |
+| `examples/render.rs` | Renders a voice on the built-in synth to a WAV file |
 | `hw_check.py` | Runs the hardware checks and scores the recordings |
+| `host_check.py` | Loads the built plugin in a VST3 host and measures the built-in synth |
+| `synth_check.py` | Compares the built-in synth with the unit: level, spectrum, low end |

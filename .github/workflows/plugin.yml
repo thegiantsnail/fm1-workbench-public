@@ -1,0 +1,117 @@
+# Builds and tests FM-1 Controller (vst/) for Windows and macOS.
+# On a tag like v0.1.0 the builds are attached to a GitHub release of that tag.
+#
+# Branches are built when they change the plugin; main is not, since it only receives branches
+# that were already built (and, in the public repository, snapshots that are built when tagged).
+name: Plugin
+
+on:
+  workflow_dispatch:
+  push:
+    branches-ignore: [main]
+    tags: ['v*']
+    paths:
+      - 'vst/**'
+      - 'app/dx7.js'
+      - 'app/fm1-synth.js'
+      - 'app/speech.js'
+      - 'app/speech/**'
+      - '.github/workflows/plugin.yml'
+  pull_request:
+    paths:
+      - 'vst/**'
+      - '.github/workflows/plugin.yml'
+
+permissions:
+  contents: write   # the release job attaches files to a release
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: windows-x64
+          - os: macos-latest
+            name: macos-universal
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: vst
+    env:
+      # The speech tests run the workbench's own app/speech.js, found through this.
+      FM1_WORKBENCH: ${{ github.workspace }}
+      # The built-in synth is compared with app/fm1-synth.js in Node: fail rather than skip.
+      FM1_REQUIRE_NODE: '1'
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            vst/target
+          key: plugin-${{ matrix.name }}-${{ hashFiles('vst/Cargo.lock') }}
+          restore-keys: plugin-${{ matrix.name }}-
+
+      - name: Unit tests
+        run: cargo test
+
+      - name: Bundle (Windows)
+        if: runner.os == 'Windows'
+        run: cargo xtask bundle fm1_vst --release
+
+      - name: Bundle (macOS, universal)
+        if: runner.os == 'macOS'
+        run: |
+          rustup target add x86_64-apple-darwin aarch64-apple-darwin
+          cargo xtask bundle-universal fm1_vst --release
+
+      - name: Package
+        run: |
+          mkdir -p dist/package
+          cp -R "target/bundled/FM-1 Controller.vst3" "target/bundled/FM-1 Controller.clap" dist/package/
+          cp ../LICENSE ../NOTICE.md dist/package/
+          cp README.md dist/package/README.md
+          cd dist/package
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            7z a -tzip "../FM-1-Controller-${{ matrix.name }}.zip" . > /dev/null
+          else
+            zip -qry "../FM-1-Controller-${{ matrix.name }}.zip" .
+          fi
+          ls -l ..
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FM-1-Controller-${{ matrix.name }}
+          path: vst/dist/FM-1-Controller-${{ matrix.name }}.zip
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > notes.md <<'NOTES'
+          FM-1 Controller plays and programs the M-VAVE FM-1 from a DAW. Without the unit, and for offline renders, it plays its built-in software FM-1 instead. See `vst/README.md` in the repository for what it does and how it was checked.
+
+          **Install**
+          - **Windows**: unzip and copy `FM-1 Controller.vst3` to `C:\Program Files\Common Files\VST3\`. Switch the FM-1's MIDI output off in the DAW's own MIDI settings: Windows lets only one program open it. This build has not been tried on Windows hardware by the author.
+          - **macOS**: unzip and copy `FM-1 Controller.vst3` to `~/Library/Audio/Plug-Ins/VST3/`. The build is not notarised: clear the quarantine flag with `xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/VST3/"FM-1 Controller.vst3"`.
+
+          Licensed under the GNU General Public License, version 3; the source is this repository at this tag.
+          NOTES
+          gh release create "$GITHUB_REF_NAME" dist/*.zip --repo "$GITHUB_REPOSITORY" \
+            --title "FM-1 Controller $GITHUB_REF_NAME" --notes-file notes.md

@@ -15,7 +15,7 @@ use crate::algo;
 use crate::dx7::{self, Voice};
 use crate::kit::{Kit, Track};
 use crate::library::{self, Filter, Library, State, TAGS};
-use crate::params::{Fm1Params, Fx};
+use crate::params::{Fm1Params, Fx, Sound};
 use crate::speech;
 use crate::voicegen::{self, Rng, Style};
 
@@ -218,11 +218,23 @@ impl Gui {
             ui.add_space(2.0);
             ui.horizontal(|ui| {
                 let shared = self.params.shared.clone();
-                if shared.link.connected.load(Ordering::Relaxed) {
-                    ui.colored_label(GOOD, "FM-1 connected");
-                } else {
-                    ui.colored_label(BAD, "FM-1 not found");
-                }
+                let connected = shared.link.connected.load(Ordering::Relaxed);
+                let (good, playing) = sound_status(self.params.sound_mode(), connected);
+                ui.colored_label(if good { GOOD } else { BAD }, playing);
+                let mut sound = self.params.sound.value();
+                egui::ComboBox::from_id_salt("sound")
+                    .width(96.0)
+                    .selected_text(Sound::NAMES[sound.clamp(0, 3) as usize])
+                    .show_ui(ui, |ui| {
+                        for (index, name) in Sound::NAMES.iter().enumerate() {
+                            ui.selectable_value(&mut sound, index as i32, *name);
+                        }
+                    })
+                    .response
+                    .on_hover_text(
+                        "What makes the sound. Auto: the FM-1 when it is connected, otherwise the built-in software FM-1. Offline renders always use the built-in synth.",
+                    );
+                set_int(setter, &self.params.sound, sound);
                 ui.separator();
                 ui.label("Voice");
                 let name = egui::TextEdit::singleline(&mut self.name_edit).char_limit(10).desired_width(96.0);
@@ -242,7 +254,7 @@ impl Gui {
                     }
                 }
                 ui.separator();
-                if ui.button("Play").on_hover_text("Play a short note on the FM-1").clicked() {
+                if ui.button("Play").on_hover_text("Play a short note").clicked() {
                     self.audition();
                 }
                 ui.checkbox(&mut self.audition_on_load, "Play on load");
@@ -497,7 +509,7 @@ impl Gui {
         let params = self.params.clone();
         toggle(ui, setter, &params.control_fx, "Control the FM-1's effects from this plugin");
         ui.label(
-            "Off: the unit keeps its own effect settings. On: the values below are sent and saved with the project.",
+            "Off: the unit keeps its own effect settings. On: the values below are sent and saved with the project. The built-in synth has its own versions of these effects, heard only while this is on.",
         );
         ui.add_space(8.0);
         let enabled = params.control_fx.value();
@@ -526,7 +538,7 @@ impl Gui {
         ui.heading("Firmware and output level");
         toggle(ui, setter, &params.firmware_va, "The unit runs Baud Girl's FM-1+VA firmware");
         ui.label(
-            "FM-1+VA takes LFO speed and delay as controllers (sent with every voice change) and has a master volume. The stock M-VAVE firmware ignores all three.",
+            "FM-1+VA takes LFO speed and delay as controllers (sent with every voice change) and has a master volume. The stock M-VAVE firmware ignores all three. The built-in synth behaves as the firmware chosen here.",
         );
         let shared_channel = params.key_channel.value() == params.fx_channel.value();
         ui.add_enabled_ui(params.firmware_va.value() && !shared_channel, |ui| {
@@ -654,6 +666,17 @@ impl Gui {
     }
 }
 
+/// What is playing, for the top bar: (all is well, text).
+fn sound_status(sound: Sound, connected: bool) -> (bool, &'static str) {
+    match sound.sinks(connected, true) {
+        (true, true) => (true, "FM-1 + built-in synth"),
+        (true, false) if connected => (true, "FM-1 connected"),
+        (false, true) if sound == Sound::BuiltIn => (true, "Built-in synth"),
+        (false, true) => (true, "Built-in synth (FM-1 not found)"),
+        _ => (false, "FM-1 not found"),
+    }
+}
+
 /// A drop-down over (stored value, label) pairs. Returns true when the choice changed.
 fn choice(ui: &mut egui::Ui, id: &str, value: &mut String, options: &[(String, String)]) {
     let shown = options.iter().find(|(v, _)| v == value).map_or(value.clone(), |(_, label)| label.clone());
@@ -662,13 +685,6 @@ fn choice(ui: &mut egui::Ui, id: &str, value: &mut String, options: &[(String, S
             ui.selectable_value(value, option.clone(), label.clone());
         }
     });
-}
-
-/// The system clipboard's text, via the platform's own tool.
-fn clipboard_text() -> Option<String> {
-    let output = std::process::Command::new("pbpaste").output().ok()?;
-    let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    (output.status.success() && !text.is_empty()).then_some(text)
 }
 
 fn owned(options: &[(&str, &str)]) -> Vec<(String, String)> {
@@ -702,7 +718,7 @@ impl Gui {
         ui.horizontal(|ui| {
             // Some hosts keep the typing keyboard for themselves; the clipboard always works.
             if ui.button("Paste").on_hover_text("Replace the text with the clipboard's").clicked() {
-                if let Some(text) = clipboard_text() {
+                if let Some(text) = crate::platform::clipboard_text() {
                     settings.text = text;
                 }
             }
@@ -1046,7 +1062,7 @@ mod tests {
     fn every_tab_lays_out_and_shows_its_controls() {
         let mut rig = Rig::new();
         rig.dump("voice");
-        for text in ["FM-1 not found", "Algorithm", "OP1", "OP6", "carrier", "Feedback", "Detune", "Transpose", "TEST LEAD    lead · BANK1 #1"] {
+        for text in ["Built-in synth (FM-1 not found)", "Auto", "Algorithm", "OP1", "OP6", "carrier", "Feedback", "Detune", "Transpose", "TEST LEAD    lead · BANK1 #1"] {
             assert!(rig.shows(text), "voice tab lacks {text:?}");
         }
         assert!(rig.shows("3 of 3"));
@@ -1062,6 +1078,22 @@ mod tests {
             }
         }
         assert!(rig.take_sets().is_empty(), "looking at tabs must not change parameters");
+    }
+
+    #[test]
+    fn the_sound_menu_sets_the_sound_parameter_and_the_status_follows_the_unit() {
+        let mut rig = Rig::new();
+        rig.click("Auto");
+        rig.dump("sound-menu");
+        rig.click("Both");
+        assert_eq!(rig.take_sets(), vec![("Sound".to_string(), "Both".to_string())]);
+
+        assert_eq!(sound_status(Sound::Auto, false), (true, "Built-in synth (FM-1 not found)"));
+        assert_eq!(sound_status(Sound::Auto, true), (true, "FM-1 connected"));
+        assert_eq!(sound_status(Sound::Fm1, false), (false, "FM-1 not found"));
+        assert_eq!(sound_status(Sound::BuiltIn, true), (true, "Built-in synth"));
+        assert_eq!(sound_status(Sound::Both, true), (true, "FM-1 + built-in synth"));
+        assert_eq!(sound_status(Sound::Both, false), (true, "Built-in synth (FM-1 not found)"));
     }
 
     #[test]
