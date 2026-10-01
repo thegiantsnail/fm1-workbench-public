@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FM-1 Workbench</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Cpath d=%22M8 1l7 7-7 7-7-7z%22 fill=%22%23f0a23b%22/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>FM-1 Workbench</h1>
+  <div class="midi">
+    <span id="midiStatus" class="pill off">MIDI: not connected</span>
+    <button id="connectBtn">Connect</button>
+    <label>Out <select id="outSel"></select></label>
+    <label>In <select id="inSel"></select></label>
+    <label>Key ch <select id="keyCh"></select></label>
+    <label>FX ch <select id="fxCh"></select></label>
+    <label title="Which firmware the FM-1 runs. FM-1+VA (Baud Girl) adds LFO speed and master volume over MIDI; the Software FM-1 follows this too.">Firmware <select id="fwSel">
+      <option value="stock">M-VAVE</option><option value="va">FM-1+VA</option></select></label>
+    <button id="panicBtn" class="warn" title="Explicit note-off for every key (the FM-1 ignores All Notes Off)">Panic</button>
+  </div>
+</header>
+
+<main>
+  <!-- LIBRARY -->
+  <section id="library" class="panel">
+    <div class="panel-head">
+      <h2>Library <small id="libCount"></small></h2>
+      <label class="btn">Import .syx<input id="importInput" type="file" accept=".syx,.SYX,.bin" multiple hidden></label>
+    </div>
+    <button id="loadBundled" title="Import the library built from your own .syx banks by build_library.py (library/index.json)">Load built library</button>
+    <div id="dropZone" class="drop">Drop DX7 .syx banks or voices here</div>
+    <div class="row">
+      <input id="search" type="search" placeholder="Search name or bank…">
+      <label class="chk"><input id="favOnly" type="checkbox"> ★</label>
+    </div>
+    <div class="row">
+      <select id="catFilter"><option value="">All categories</option></select>
+      <select id="bankFilter"><option value="">All banks</option></select>
+    </div>
+    <ul id="voiceList" tabindex="0"></ul>
+    <div class="bank-builder">
+      <div><b id="pickCount">0</b>/32 picked for a bank</div>
+      <div class="row wrap">
+        <button id="pickClear">Clear picks</button>
+        <button id="exportBank">Export bank .syx</button>
+        <button id="sendBank" class="warn">Send bank to FM-1…</button>
+        <button id="deleteBank" class="danger">Delete filtered…</button>
+      </div>
+    </div>
+    <p class="hint">Click = audition · Double-click / Enter = open in editor · ↑↓ browse · <b>+</b> = add to active drum track / player channel · ☐ pick for bank · ★ favorite</p>
+  </section>
+
+  <!-- CENTER: tabs -->
+  <section id="center" class="panel">
+    <nav class="tabs" role="tablist">
+      <button role="tab" data-tab="editor" class="on">Editor</button>
+      <button role="tab" data-tab="drums">Drums</button>
+      <button role="tab" data-tab="player">Player</button>
+      <button role="tab" data-tab="speech">Speech</button>
+    </nav>
+
+    <!-- EDITOR -->
+    <div id="tab-editor" class="tab on">
+      <div class="panel-head">
+        <input id="voiceName" maxlength="10" spellcheck="false" aria-label="Voice name">
+        <div class="row wrap">
+          <button id="saveToTarget" class="target" hidden></button>
+          <button id="sendVoice" title="Send whole voice to FM-1 (as parameter changes)">Send</button>
+          <button id="saveVoice">Save to library</button>
+          <button id="exportVoice">Export .syx</button>
+          <button id="initVoice">Init</button>
+          <label class="chk"><input id="liveSend" type="checkbox" checked> live</label>
+        </div>
+      </div>
+      <div class="globals">
+        <div class="algo">
+          <label>Algorithm <input id="algNum" type="number" min="1" max="32"></label>
+          <svg id="algSvg" viewBox="0 0 240 170" aria-label="Algorithm diagram"></svg>
+        </div>
+        <div id="globalParams" class="param-grid"></div>
+      </div>
+      <div id="ops" class="ops"></div>
+      <div class="tools">
+        <div class="tool">
+          <h3>Generate</h3>
+          <div class="row wrap">
+            <button id="randomize">Randomize</button>
+            <label>Style <select id="randStyle">
+              <option value="any">Anything</option><option value="keys">Keys / EP</option>
+              <option value="bass">Bass</option><option value="pad">Pad</option>
+              <option value="bell">Bell / metallic</option><option value="pluck">Pluck</option></select></label>
+          </div>
+          <div class="row wrap">
+            <button id="mutate">Mutate</button>
+            <label>Amount <input id="mutAmt" type="range" min="1" max="50" value="12"></label>
+            <button id="undo" title="Undo last change">Undo</button>
+          </div>
+        </div>
+        <div class="tool">
+          <h3>Morph</h3>
+          <div class="row wrap">
+            <button id="setA">Set A = current</button><span id="aName" class="tag">—</span>
+            <button id="setB">Set B = current</button><span id="bName" class="tag">—</span>
+          </div>
+          <div class="row"><span>A</span><input id="morph" type="range" min="0" max="1000" value="0" disabled><span>B</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- DRUMS -->
+    <div id="tab-drums" class="tab">
+      <div class="transport row wrap">
+        <button id="seqPlay" class="play">▶ Play</button>
+        <label>BPM <input id="seqBpm" type="number" min="30" max="300" value="112"></label>
+        <label>Swing <input id="seqSwing" type="range" min="0" max="75" value="0"><b id="seqSwingLbl">0%</b></label>
+        <label>Humanize <input id="seqHuman" type="range" min="0" max="30" value="0"><b id="seqHumanLbl">0 ms</b></label>
+        <label title="Chance per hit to swap in a random voice from the whole kit">Glitch <input id="seqGlitch" type="range" min="0" max="100" value="0"><b id="seqGlitchLbl">0%</b></label>
+        <label title="Step length">Rate <select id="seqRate"></select></label>
+        <label title="Steps before the chain moves to its next slot">Pattern length <input id="seqLen" type="number" min="1" max="64" value="16"></label>
+        <label class="chk" title="Play saved slots in order, e.g. 1 2 2 3 (each for its pattern length)"><input id="chainOn" type="checkbox"> Chain</label>
+        <input id="chainSlots" type="text" placeholder="1 2 2 3" size="10" aria-label="Chain of slots">
+        <span id="seqStat" class="dim"></span>
+      </div>
+      <div class="row wrap">
+        <span class="dim">Paint:</span>
+        <div id="paintModes" class="seg"></div>
+        <div id="seqPage" class="seg" title="Steps shown"></div>
+        <label>Brush <input id="brush" type="range" min="0" max="127" value="100"><b id="brushLbl">100</b></label>
+      </div>
+      <div class="kitbar row wrap">
+        <label>Kit <select id="kitSel"></select></label>
+        <button id="kitLoad" title="Put this kit's voices on the tracks (steps are kept)">Load kit</button>
+        <button id="kitSave">Save kit…</button>
+        <button id="kitDelete">Delete</button>
+        <button id="kitSyx" title="All kit voices, macros applied, as a DX7 32-voice bank (Dexed, FM-1 import)">Export .syx bank</button>
+        <button id="kitJson">Export kit</button>
+        <label class="btn">Import kit<input id="kitImport" type="file" accept=".json" hidden></label>
+      </div>
+      <div id="pads" class="pads"></div>
+      <div id="seqGrid" class="seq-grid"></div>
+      <div id="fxLane" class="fx-lane"></div>
+      <div class="row wrap">
+        <button id="rollKit" title="Pick a random voice from the library for every track, by its role">🎲 Roll kit</button>
+        <button id="seqClear">Clear steps</button>
+        <button id="seqAddTrack">+ Track</button>
+        <label>Pattern <select id="patSlot"></select></label>
+        <button id="patSave">Save</button><button id="patLoad">Load</button>
+        <button id="patExport">Export .json</button>
+        <label class="btn">Import .json<input id="patImport" type="file" accept=".json" hidden></label>
+      </div>
+      <p class="hint">Pads: click or keys <b>1–9</b> (Shift = soft). Click a track name or pad to make it active (library <b>+</b> adds voices to it); select a voice chip to shape it with the drum macros (double-click a slider to reset it). Each track can hold several voices: <b>fixed</b> uses the first, <b>cycle</b> steps through them per hit, <b>random</b> picks one. Track length sets polymeter. <b>Shift-drag</b> a step to move it, <b>Alt-drag</b> to copy it (all its settings). Accent = full velocity; Slide = legato into the next note (tie over empty steps). Ringing notes keep their voice when the next voice loads, so tails layer.</p>
+    </div>
+
+    <!-- PLAYER -->
+    <div id="tab-player" class="tab">
+      <div class="row wrap">
+        <label class="btn">Open .mid<input id="midInput" type="file" accept=".mid,.midi,.MID" hidden></label>
+        <b id="midName" class="tag">no file</b>
+        <span id="midInfo" class="dim"></span>
+      </div>
+      <div class="transport row wrap">
+        <button id="plPlay" class="play" disabled>▶ Play</button>
+        <button id="plRew" disabled>⏮</button>
+        <label class="chk"><input id="plLoop" type="checkbox"> Loop</label>
+        <label>Tempo <input id="plTempo" type="range" min="25" max="200" value="100"><b id="plTempoLbl">100%</b></label>
+        <label>Transpose <input id="plTrans" type="number" min="-36" max="36" value="0"></label>
+        <label>Velocity <input id="plVel" type="range" min="25" max="200" value="100"><b id="plVelLbl">100%</b></label>
+      </div>
+      <div class="playhead">
+        <span id="plTime">0:00</span>
+        <input id="plPos" type="range" min="0" max="1000" value="0" disabled aria-label="Playhead position">
+        <span id="plLen">0:00</span>
+      </div>
+      <canvas id="plRoll" class="roll" height="120"></canvas>
+      <div id="plChans" class="chan-list"></div>
+      <p class="hint">Each MIDI channel can get its own library voice (<b>+</b> in the library adds to the active channel). The FM-1 has one voice at a time, so the player switches voices between notes with parameter diffs — held notes keep their sound. Channel 10 can drive the drum kit from the Drums tab.</p>
+    </div>
+
+    <!-- SPEECH -->
+    <div id="tab-speech" class="tab">
+      <div class="row wrap">
+        <div class="seg" id="spSrc">
+          <button data-src="text" class="on">Type</button>
+          <button data-src="rec">Recording</button>
+        </div>
+        <button id="spRec" title="Record up to 10 s from your microphone">● Record</button>
+        <label class="btn" title="Any audio file your browser can decode (WAV, MP3, OGG…)">Open audio…<input id="spFile" type="file" accept="audio/*" hidden></label>
+        <span id="spSrcInfo" class="dim"></span>
+      </div>
+      <textarea id="spText" rows="3" spellcheck="true" aria-label="Text to speak">Hello world. I am a synthesizer, made of sine waves. Can you hear me?</textarea>
+      <div class="transport row wrap">
+        <button id="spSay" class="play">▶ Speak</button>
+        <button id="spWav" title="Render with the Software FM-1 and save as WAV">Download WAV</button>
+        <label title="Voice presets: pitch/formant shifts (feminine, child, giant, alien), whisper, robots, a bell-like cyborg, singing, the FM-1's own effects (radio, cathedral, chorus, echo - switched off again afterwards), and intonation styles. Pitch and Speed stay relative to the sliders.">Character <select id="spChar"></select></label>
+        <label title="Each 20 ms of speech is a separate FM-1 note. Soft joins (default): phase-aligned, and notes inside a vowel fade into each other (20 ms overlap) while consonant onsets stay sharp - about half the 50 Hz gravel and fewer clicks, same loudness and intelligibility on the FM-1. Sync starts every note in phase with the one before (much less 50 Hz gravel, same intelligibility on the FM-1). Smooth also crossfades the notes and glides the pitch continuously (smoothest, a little less crisp). Off: the plain note chain.">Smoothness <select id="spSmooth">
+          <option value="soft">Soft joins (crossfade vowels)</option><option value="sync">Sync (phase-aligned)</option><option value="smooth">Smooth (crossfade + glide)</option><option value="off">Off</option></select></label>
+        <label title="Diphthongs (the vowels in bite, bout, boy, bait, boat) as ONE note whose second formant really glides: that operator runs in ratio mode and the pitch envelope sweeps it, while the pitch itself comes from fixed-frequency operators (the FM-1's pitch envelope leaves those alone). F1 moves by a late-starting operator. All vowels: every vowel is one note.">Diphthongs <select id="spDiph">
+          <option value="glide">One-note glide</option><option value="all">All vowels as one note</option><option value="off">Note chain</option></select></label>
+        <label title="How each vowel frame is built. Exact formants: carriers at the measured formant frequencies (fixed-frequency operators) - most intelligible in tests. Harmonic: carriers on the nearest harmonic (Chowning). Le Brun: two harmonics per formant, cross-faded. Sine-wave: three pure tones on the formants.">Voice <select id="spDesign">
+          <option value="fixedfm">Exact formants</option><option value="harmonic">Harmonic (Chowning)</option>
+          <option value="lebrun">Harmonic pairs (Le Brun)</option><option value="sine">Sine-wave speech</option>
+        </select></label>
+        <label>Intonation <select id="spTone">
+          <option value="grammar">Grammar</option><option value="flat">Flat (robot)</option><option value="follow">Follow recording</option>
+        </select></label>
+        <span id="spStatus" class="dim"></span>
+      </div>
+      <div class="row wrap sp-knobs">
+        <label>Pitch <input id="spKey" type="range" min="36" max="60" value="45"><b id="spKeyLbl" class="tag"></b></label>
+        <label>Speed <input id="spSpeed" type="range" min="60" max="160" value="100"><b id="spSpeedLbl" class="tag"></b></label>
+        <label>Accent <input id="spAccent" type="range" min="0" max="8" value="3"><b id="spAccentLbl" class="tag"></b></label>
+        <label>Brightness <input id="spBright" type="range" min="30" max="75" value="54"><b id="spBrightLbl" class="tag"></b></label>
+      </div>
+      <canvas id="spView" class="roll sp-view" height="150" aria-label="Formant tracks and pitch contour"></canvas>
+      <div id="spWords" class="sp-words"></div>
+      <div id="spLint" class="sp-lint"></div>
+      <p class="hint">Every 20 ms of speech becomes one FM-1 note with its own voice: three carriers tuned to the vowel formants
+        (algorithm 22), or feedback noise for hiss. Typed text is stitched from sound units analysed from a text-to-speech voice;
+        a recording is analysed directly. Intonation comes from the grammar: a part-of-speech tagger picks the accented words
+        (nouns strongest, then adjectives, adverbs, verbs; shading shows the strength, hover for details), and each phrase
+        turns on its last accent — falling for statements, rising for yes/no questions and before commas. Noun/verb pairs get
+        their own stress (a REcord / to reCORD). Plays on the FM-1 or on the Software FM-1 (Out menu).</p>
+    </div>
+  </section>
+
+  <!-- FX + KEYS -->
+  <section id="perform" class="panel">
+    <div class="panel-head"><h2>Effects <small>(CC 0–23 on FX ch)</small></h2><button id="fxSendAll" title="Push all effect settings shown here">Send all</button></div>
+    <div id="fx"></div>
+    <div class="panel-head"><h2>Play</h2></div>
+    <div class="row wrap">
+      <label>Octave <button id="octDown">−</button><b id="octLbl">4</b><button id="octUp">+</button></label>
+      <label>Velocity <input id="vel" type="range" min="1" max="127" value="100"><b id="velLbl">100</b></label>
+      <label>Program <input id="prog" type="number" min="1" max="128" value="1"><button id="progSend">Go</button></label>
+      <label id="masterWrap" title="Master volume (CC 7 on the key channel). FM-1+VA firmware and the Software FM-1 only; needs Key ch and FX ch to differ.">Volume <input id="master" type="range" min="0" max="127" value="100"><b id="masterLbl">100</b></label>
+    </div>
+    <div id="keys" class="keys"></div>
+    <p class="hint">Computer keys: A W S E D F T G Y H U J K O L P ; — Z/X octave (Space = play/stop on Drums &amp; Player)</p>
+    <div class="panel-head"><h2>Log</h2></div>
+    <pre id="log"></pre>
+  </section>
+</main>
+
+<script src="dx7.js"></script>
+<script src="fm1-synth.js"></script>
+<script src="softsynth.js"></script>
+<script src="engine.js"></script>
+<script src="app.js"></script>
+<script src="smf.js"></script>
+<script src="drums.js"></script>
+<script src="seq.js"></script>
+<script src="player.js"></script>
+<script src="speech.js"></script>
+<script src="speechui.js"></script>
+</body>
+</html>

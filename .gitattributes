@@ -1,0 +1,8 @@
+* text=auto
+*.syx binary
+*.SYX binary
+*.mid binary
+*.midi binary
+
+# keep the Gradle wrapper script runnable on macOS/Linux
+android/gradlew text eol=lf

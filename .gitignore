@@ -1,0 +1,25 @@
+# Python env and caches
+.venv/
+__pycache__/
+*.pyc
+
+# Measurement output: audio recordings, captures, screenshots, exported voices
+dumps/
+*.npy
+*.wav
+
+# Local Claude Code settings
+.claude/settings.local.json
+
+# Firebase CLI cache
+.firebase/
+
+# Personal deploy settings (project id, Google account)
+.deploy.local.json
+firmware/
+
+# Your own DX7 patch banks and what is built from them (see "Voices" in README.md). Not distributed
+# with the project: most patch collections have no clear redistribution terms.
+sysexFinal/
+app/library/index.json
+app/library/kits.json

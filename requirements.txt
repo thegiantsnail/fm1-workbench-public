@@ -1,0 +1,9 @@
+# MCP server + hardware scripts (python3 -m venv .venv && .venv/bin/pip install -r requirements.txt; on Windows use .venv\Scripts\pip)
+mcp>=2
+mido
+python-rtmidi
+sounddevice
+numpy
+# end-to-end tests and plots
+playwright
+matplotlib

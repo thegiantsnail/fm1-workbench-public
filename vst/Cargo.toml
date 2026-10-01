@@ -1,0 +1,28 @@
+[package]
+name = "fm1_vst"
+version = "0.1.0"
+edition = "2021"
+description = "Controller plugin for the M-VAVE FM-1 hardware synth"
+license = "GPL-3.0-only"
+
+[workspace]
+members = ["xtask"]
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git", rev = "de421011f41a6d10fc8c7a6084e4f4dee0143683", features = ["standalone"] }
+nih_plug_egui = { git = "https://github.com/robbert-vdh/nih-plug.git", rev = "de421011f41a6d10fc8c7a6084e4f4dee0143683" }
+rquickjs = "0.14"
+rtrb = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+coremidi = "0.8"
+mach2 = "0.4"
+
+[profile.release]
+lto = "thin"
+strip = "symbols"
